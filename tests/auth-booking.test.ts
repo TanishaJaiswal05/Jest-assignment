@@ -31,8 +31,9 @@ const mockedService = Service as unknown as {
 const mockedBooking = Booking as unknown as {
   find: jest.Mock;
   findById: jest.Mock;
-  mockImplementation: (factory: () => any) => void;
 };
+
+const mockedBookingConstructor = Booking as unknown as jest.Mock;
 
 const customerId = '507f1f77bcf86cd799439011';
 const salonId = '507f1f77bcf86cd799439012';
@@ -64,11 +65,14 @@ describe('Authentication and booking APIs', () => {
     mockedService.findById = jest.fn();
     mockedBooking.find = jest.fn();
     mockedBooking.findById = jest.fn();
+    mockedBookingConstructor.mockReset();
     jest.clearAllMocks();
   });
 
   it('1. registers a customer', async () => {
     // Registration should succeed when the email is not already taken.
+    mockedUser.findOne.mockResolvedValue(null);
+    mockedUser.findOne.mockResolvedValue(null);
     mockedUser.findOne.mockResolvedValue(null);
     (User as unknown as jest.Mock).mockImplementation(() => ({
       save: jest.fn().mockResolvedValue(true)
@@ -82,6 +86,21 @@ describe('Authentication and booking APIs', () => {
 
     expect(response.status).toBe(201);
     expect(response.body).toEqual({ message: 'User registered successfully' });
+  });
+
+  it('rejects registration when the email is already in use', async () => {
+    // Duplicate registration should be rejected before a new user is saved.
+    mockedUser.findOne.mockResolvedValue(customer);
+
+    const response = await request(app).post('/api/register').send({
+      name: 'Another Customer',
+      email: customer.email,
+      password
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'Email already in use' });
+    expect(mockedBookingConstructor).not.toHaveBeenCalled();
   });
 
   it('2. logs in and returns a JWT', async () => {
@@ -145,7 +164,7 @@ describe('Authentication and booking APIs', () => {
     });
     mockedBooking.find.mockResolvedValue([]);
 
-    (Booking as unknown as jest.Mock).mockImplementation(() => ({
+    mockedBookingConstructor.mockImplementation(() => ({
       _id: bookingId,
       save: jest.fn().mockResolvedValue(true),
       startTime: '10:00',
@@ -168,6 +187,43 @@ describe('Authentication and booking APIs', () => {
     expect(response.body.booking).toEqual(
       expect.objectContaining({ startTime: '10:00' })
     );
+  });
+
+  it('rejects a booking request with an invalid token', async () => {
+    // Invalid tokens must be rejected by auth middleware before booking logic runs.
+    const response = await request(app)
+      .post('/api/bookings')
+      .set('Authorization', 'Bearer definitely-not-a-valid-token')
+      .send({ salonId, stylistId, serviceId, slotTime: '10:00', date: '2026-10-01' });
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({ error: 'Invalid token' });
+    expect(mockedUser.findById).not.toHaveBeenCalled();
+    expect(mockedService.findById).not.toHaveBeenCalled();
+  });
+
+  it('rejects a booking when the requested time overlaps an existing booking', async () => {
+    // The booking API must prevent overlapping bookings for the same salon and stylist.
+    mockedUser.findById.mockResolvedValue(customer);
+    mockedService.findById.mockResolvedValue({ _id: serviceId, duration: 60 });
+    mockedBooking.find.mockResolvedValue([
+      { startTime: '09:30', endTime: '10:30', status: 'booked' }
+    ]);
+
+    const response = await request(app)
+      .post('/api/bookings')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        salonId,
+        stylistId,
+        serviceId,
+        slotTime: '10:00',
+        date: '2026-10-01'
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'Time slot is no longer available' });
+    expect(mockedBookingConstructor).not.toHaveBeenCalled();
   });
 
   it('5. cancels an authenticated booking', async () => {

@@ -1,5 +1,5 @@
 import request from 'supertest';
-import * as bcrypt from 'bcryptjs';
+import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 import app from '../app';
@@ -13,6 +13,14 @@ jest.mock('../models/User');
 jest.mock('../models/Salon');
 jest.mock('../models/Service');
 jest.mock('../models/Booking');
+
+jest.mock('bcryptjs', () => ({
+  __esModule: true,
+  default: {
+    hash: jest.fn().mockResolvedValue('hashed-password'),
+    compare: jest.fn().mockResolvedValue(true)
+  }
+}));
 
 const mockedUser = User as unknown as {
   findOne: jest.Mock;
@@ -106,7 +114,7 @@ describe('Authentication and booking APIs', () => {
   it('2. logs in and returns a JWT', async () => {
     // Login returns a token after checking stored password hash.
     mockedUser.findOne.mockResolvedValue(customer);
-    jest.spyOn(bcrypt, 'compare').mockResolvedValue(true as never);
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
     const response = await request(app).post('/api/login').send({
       email: customer.email,
